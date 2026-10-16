@@ -2,7 +2,7 @@
 -- Usage:
 --   local LG = loadstring(game:HttpGet(url))()
 --   LG.Enable() / LG.Disable() / LG.Toggle(bool)
---   LG.SetConfig({ Blur = "full"|"outside"|"off", Rejoin = true, Logo = true, RejoinText = "hello" })
+--   LG.SetConfig({ ... })
 
 local Players = game:GetService("Players")
 local Lighting = game:GetService("Lighting")
@@ -16,10 +16,13 @@ local LocalPlayer = Players.LocalPlayer
 
 local liquidEnabled = false
 local Config = {
-	Blur = "full", -- "full" | "outside" | "off"
+	Blur = "full", -- "full" | "inside" | "off"
 	Rejoin = true,
+	RejoinPos = "top", -- "top" | "bottomleft"
 	Logo = true,
-	RejoinLabel = "", -- text next to rejoin button
+	SideText = "", -- custom text top-left, right of logo
+	RotateIcons = true,
+	RotateStars = false,
 	LogoId = "rbxassetid://125209698949144",
 	GlassTransparency = 0.76,
 	HoverGlowAlpha = 0.85,
@@ -31,16 +34,16 @@ local Config = {
 	GlassColor = Color3.fromRGB(255, 255, 255),
 }
 
--- restore storage
-local styled = {} -- [GuiObject] = original props
+local styled = {}
 local conns = {}
-local created = {} -- instances we created
+local created = {}
 local blurEffect = nil
-local outsideBlurGui = nil
+local insideBlurFrame = nil
 local proxyFrame = nil
 local menuRef = nil
 local menuGuiRef = nil
 local styledSet = {}
+local sideTextLabel = nil
 
 local PROTECTED_KW = {
 	"color", "picker", "palette", "slider", "hue", "hex", "rainbow", "rgb",
@@ -89,7 +92,7 @@ local function isProtected(obj)
 			end
 		end
 		p = p.Parent
-		hops += 1
+		hops = hops + 1
 	end
 	return obj:IsA("TextBox")
 end
@@ -162,7 +165,6 @@ local function melt(parent, mousePos)
 end
 
 local function findPreviewNear(star)
-	-- walk siblings / parent children for an ImageLabel/ImageButton that looks like item preview
 	local parent = star.Parent
 	if not parent then
 		return nil
@@ -184,7 +186,6 @@ local function findPreviewNear(star)
 			end
 		end
 	end
-	-- also check direct siblings
 	for _, d in ipairs(parent:GetChildren()) do
 		if (d:IsA("ImageLabel") or d:IsA("ImageButton")) and d ~= star then
 			local n = string.lower(d.Name)
@@ -204,7 +205,6 @@ local function styleStar(star)
 	end
 	styledSet[star] = true
 	saveProp(star)
-	-- force transparent bg for star button
 	if star:IsA("GuiObject") then
 		star.BackgroundTransparency = 1
 		star.BorderSizePixel = 0
@@ -222,8 +222,10 @@ local function styleStar(star)
 		if not liquidEnabled then
 			return
 		end
-		TweenService:Create(star, tweenIn, { Rotation = 15 }):Play()
-		if preview and preview.Parent then
+		if Config.RotateStars then
+			TweenService:Create(star, tweenIn, { Rotation = 15 }):Play()
+		end
+		if Config.RotateIcons and preview and preview.Parent then
 			TweenService:Create(preview, tweenIn, { Rotation = 15 }):Play()
 		end
 	end))
@@ -231,8 +233,10 @@ local function styleStar(star)
 		if not liquidEnabled then
 			return
 		end
-		TweenService:Create(star, tweenIn, { Rotation = 0 }):Play()
-		if preview and preview.Parent then
+		if Config.RotateStars then
+			TweenService:Create(star, tweenIn, { Rotation = 0 }):Play()
+		end
+		if Config.RotateIcons and preview and preview.Parent then
 			TweenService:Create(preview, tweenIn, { Rotation = 0 }):Play()
 		end
 	end))
@@ -271,7 +275,6 @@ local function styleObject(obj)
 
 	local name = string.lower(obj.Name)
 
-	-- stars / favorites
 	if string.find(name, "star") or string.find(name, "favorite") or string.find(name, "fav") then
 		styleStar(obj)
 		return
@@ -284,7 +287,6 @@ local function styleObject(obj)
 	styledSet[obj] = true
 	saveProp(obj)
 
-	-- glass look
 	if obj:IsA("Frame") or obj:IsA("ScrollingFrame") then
 		obj.BackgroundTransparency = 1
 		obj.BorderSizePixel = 0
@@ -390,72 +392,55 @@ local function styleObject(obj)
 	end
 end
 
-local function clearOutsideBlur()
-	if outsideBlurGui then
+local function clearInsideBlur()
+	if insideBlurFrame then
 		pcall(function()
-			outsideBlurGui:Destroy()
+			insideBlurFrame:Destroy()
 		end)
-		outsideBlurGui = nil
+		insideBlurFrame = nil
 	end
 end
 
-local function applyOutsideBlur(menu)
-	clearOutsideBlur()
-	local pg = LocalPlayer:FindFirstChild("PlayerGui")
-	if not pg then
+local function applyInsideBlur(menu)
+	clearInsideBlur()
+	if not menu then
 		return
 	end
-	local gui = Instance.new("ScreenGui")
-	gui.Name = "LiquidOutsideBlur"
-	gui.IgnoreGuiInset = true
-	gui.DisplayOrder = -10
-	gui.ResetOnSpawn = false
-	gui.Parent = pg
-	outsideBlurGui = gui
-
-	-- 4 frames around the menu using AbsolutePosition/Size
-	local function makePad(name)
-		local f = Instance.new("Frame")
-		f.Name = name
-		f.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-		f.BackgroundTransparency = 0.35
-		f.BorderSizePixel = 0
-		f.ZIndex = 0
-		f.Parent = gui
-		return f
-	end
-	local top, bot, left, right = makePad("Top"), makePad("Bot"), makePad("Left"), makePad("Right")
-
-	local function update()
-		if not menu or not menu.Parent then
-			return
-		end
-		local cam = workspace.CurrentCamera
-		local vs = cam and cam.ViewportSize or Vector2.new(1920, 1080)
-		local pos = menu.AbsolutePosition
-		local size = menu.AbsoluteSize
-		local inset = GuiService:GetGuiInset()
-		local x, y = pos.X, pos.Y
-		local w, h = size.X, size.Y
-		top.Position = UDim2.fromOffset(0, 0)
-		top.Size = UDim2.fromOffset(vs.X, math.max(0, y))
-		bot.Position = UDim2.fromOffset(0, y + h)
-		bot.Size = UDim2.fromOffset(vs.X, math.max(0, vs.Y - (y + h)))
-		left.Position = UDim2.fromOffset(0, y)
-		left.Size = UDim2.fromOffset(math.max(0, x), h)
-		right.Position = UDim2.fromOffset(x + w, y)
-		right.Size = UDim2.fromOffset(math.max(0, vs.X - (x + w)), h)
-	end
-	update()
-	trackConn(menu:GetPropertyChangedSignal("AbsolutePosition"):Connect(update))
-	trackConn(menu:GetPropertyChangedSignal("AbsoluteSize"):Connect(update))
-	trackConn(workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(update))
+	-- Frosted glass overlay INSIDE the menu (semi-transparent white + slight noise feel)
+	local f = Instance.new("Frame")
+	f.Name = "LiquidInsideBlur"
+	f.BackgroundColor3 = Color3.fromRGB(200, 220, 255)
+	f.BackgroundTransparency = 0.55
+	f.BorderSizePixel = 0
+	f.Size = UDim2.fromScale(1, 1)
+	f.Position = UDim2.fromScale(0.5, 0.5)
+	f.AnchorPoint = Vector2.new(0.5, 0.5)
+	f.ZIndex = -1
+	f.Parent = menu
+	local c = Instance.new("UICorner")
+	c.CornerRadius = Config.CornerRadius
+	c.Parent = f
+	-- soft gradient for "blur" look
+	local g = Instance.new("UIGradient")
+	g.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Color3.fromRGB(180, 210, 255)),
+		ColorSequenceKeypoint.new(0.5, Color3.fromRGB(220, 230, 255)),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(180, 210, 255)),
+	})
+	g.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.15),
+		NumberSequenceKeypoint.new(0.5, 0.35),
+		NumberSequenceKeypoint.new(1, 0.15),
+	})
+	g.Rotation = 25
+	g.Parent = f
+	insideBlurFrame = f
+	table.insert(created, f)
 end
 
 local function applyBlur(on, menu)
-	-- full world blur
 	if Config.Blur == "full" and on then
-		clearOutsideBlur()
+		clearInsideBlur()
 		local b = Lighting:FindFirstChild("Nucleus_World_Blur")
 		if not b then
 			b = Instance.new("BlurEffect")
@@ -465,13 +450,13 @@ local function applyBlur(on, menu)
 		end
 		blurEffect = b
 		TweenService:Create(b, TweenInfo.new(0.3, Enum.EasingStyle.Sine), { Size = Config.MaxBlurSize }):Play()
-	elseif Config.Blur == "outside" and on then
+	elseif Config.Blur == "inside" and on then
 		if blurEffect then
 			TweenService:Create(blurEffect, TweenInfo.new(0.3), { Size = 0 }):Play()
 		end
-		applyOutsideBlur(menu)
+		applyInsideBlur(menu)
 	else
-		clearOutsideBlur()
+		clearInsideBlur()
 		if blurEffect then
 			TweenService:Create(blurEffect, TweenInfo.new(0.3), { Size = 0 }):Play()
 		end
@@ -493,12 +478,46 @@ local function applyLogo(menu)
 	local img = Instance.new("ImageLabel")
 	img.Name = "SavitarCustomLogo"
 	img.BackgroundTransparency = 1
-	img.Size = UDim2.fromOffset(64, 64)
-	img.Position = UDim2.new(0, 12, 0, 12)
+	img.Size = UDim2.fromOffset(56, 56)
+	img.Position = UDim2.new(0, 14, 0, 12)
 	img.Image = Config.LogoId
 	img.ZIndex = 50
 	img.Parent = menu
 	table.insert(created, img)
+end
+
+local function removeSideText(menu)
+	local t = menu and menu:FindFirstChild("LiquidSideText")
+	if t then
+		t:Destroy()
+	end
+	sideTextLabel = nil
+end
+
+local function applySideText(menu)
+	removeSideText(menu)
+	local text = tostring(Config.SideText or "")
+	if text == "" then
+		return
+	end
+	local label = Instance.new("TextLabel")
+	label.Name = "LiquidSideText"
+	label.BackgroundTransparency = 1
+	label.Size = UDim2.fromOffset(280, 40)
+	-- right of logo (logo ~56px at x=14)
+	local xOff = Config.Logo and 78 or 14
+	label.Position = UDim2.new(0, xOff, 0, 18)
+	label.Font = Enum.Font.GothamBold
+	label.TextSize = 22
+	label.TextColor3 = Color3.fromRGB(255, 255, 255)
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.TextYAlignment = Enum.TextYAlignment.Center
+	label.TextStrokeTransparency = 0.5
+	label.Text = text
+	label.ZIndex = 50
+	label.Parent = menu
+	sideTextLabel = label
+	table.insert(created, label)
 end
 
 local function removeRejoin(menu)
@@ -513,39 +532,27 @@ local function applyRejoin(menu)
 	if not Config.Rejoin then
 		return
 	end
+
 	local holder = Instance.new("Frame")
 	holder.Name = "RejoinContainer"
 	holder.BackgroundTransparency = 1
-	holder.Size = UDim2.fromOffset(160, 36)
-	holder.Position = UDim2.new(1, -170, 1, -46)
-	holder.AnchorPoint = Vector2.new(0, 0)
+	holder.Size = UDim2.fromOffset(100, 34)
 	holder.ZIndex = 50
 	holder.Parent = menu
 	table.insert(created, holder)
 
-	local layout = Instance.new("UIListLayout")
-	layout.FillDirection = Enum.FillDirection.Horizontal
-	layout.VerticalAlignment = Enum.VerticalAlignment.Center
-	layout.Padding = UDim.new(0, 6)
-	layout.Parent = holder
-
-	if Config.RejoinLabel and Config.RejoinLabel ~= "" then
-		local label = Instance.new("TextLabel")
-		label.Name = "RejoinSideLabel"
-		label.BackgroundTransparency = 1
-		label.Size = UDim2.fromOffset(80, 28)
-		label.Font = Enum.Font.GothamBold
-		label.TextSize = 12
-		label.TextColor3 = Color3.new(1, 1, 1)
-		label.TextXAlignment = Enum.TextXAlignment.Right
-		label.Text = tostring(Config.RejoinLabel)
-		label.ZIndex = 51
-		label.Parent = holder
+	if Config.RejoinPos == "bottomleft" then
+		holder.Position = UDim2.new(0, 14, 1, -48)
+		holder.AnchorPoint = Vector2.new(0, 0)
+	else
+		-- top near close (right side, under/near X)
+		holder.Position = UDim2.new(1, -110, 0, 12)
+		holder.AnchorPoint = Vector2.new(0, 0)
 	end
 
 	local btn = Instance.new("TextButton")
 	btn.Name = "RejoinButton"
-	btn.Size = UDim2.fromOffset(90, 32)
+	btn.Size = UDim2.fromOffset(96, 32)
 	btn.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
 	btn.BackgroundTransparency = 1
 	btn.Text = "REJOIN"
@@ -602,7 +609,7 @@ end
 
 local function restoreAll()
 	disconnectAll()
-	clearOutsideBlur()
+	clearInsideBlur()
 
 	for obj, data in pairs(styled) do
 		pcall(function()
@@ -677,12 +684,19 @@ local function restoreAll()
 	if menuRef then
 		removeRejoin(menuRef)
 		removeLogo(menuRef)
+		removeSideText(menuRef)
 		local proxy = menuRef:FindFirstChild("_Nucleus_Proxy")
 		if proxy then
 			proxy:Destroy()
 		end
+		local ib = menuRef:FindFirstChild("LiquidInsideBlur")
+		if ib then
+			ib:Destroy()
+		end
 	end
 	proxyFrame = nil
+	insideBlurFrame = nil
+	sideTextLabel = nil
 
 	if blurEffect then
 		pcall(function()
@@ -695,13 +709,30 @@ local function restoreAll()
 			end)
 		end)
 	end
-
 	local leftover = Lighting:FindFirstChild("Nucleus_World_Blur")
 	if leftover then
 		pcall(function()
 			leftover:Destroy()
 		end)
 	end
+end
+
+local function refreshChrome()
+	if not liquidEnabled or not menuRef then
+		return
+	end
+	if Config.Logo then
+		applyLogo(menuRef)
+	else
+		removeLogo(menuRef)
+	end
+	applySideText(menuRef)
+	if Config.Rejoin then
+		applyRejoin(menuRef)
+	else
+		removeRejoin(menuRef)
+	end
+	applyBlur(menuRef.Visible, menuRef)
 end
 
 local function applyLiquid()
@@ -716,7 +747,6 @@ local function applyLiquid()
 		menuRef = menu
 		menuGuiRef = menuGui
 
-		-- glass proxy behind menu content
 		local proxy = menu:FindFirstChild("_Nucleus_Proxy")
 		if not proxy then
 			proxy = Instance.new("Frame")
@@ -741,12 +771,7 @@ local function applyLiquid()
 		end
 		proxyFrame = proxy
 
-		if Config.Logo then
-			applyLogo(menu)
-		end
-		if Config.Rejoin then
-			applyRejoin(menu)
-		end
+		refreshChrome()
 
 		for _, d in ipairs(menu:GetDescendants()) do
 			styleObject(d)
@@ -820,25 +845,8 @@ API.SetConfig = function(tbl)
 			Config[k] = v
 		end
 	end
-	-- live refresh if enabled
-	if liquidEnabled and menuRef then
-		if tbl.Logo ~= nil or tbl.LogoId ~= nil then
-			if Config.Logo then
-				applyLogo(menuRef)
-			else
-				removeLogo(menuRef)
-			end
-		end
-		if tbl.Rejoin ~= nil or tbl.RejoinLabel ~= nil then
-			if Config.Rejoin then
-				applyRejoin(menuRef)
-			else
-				removeRejoin(menuRef)
-			end
-		end
-		if tbl.Blur ~= nil or tbl.MaxBlurSize ~= nil then
-			applyBlur(menuRef.Visible, menuRef)
-		end
+	if liquidEnabled then
+		refreshChrome()
 	end
 end
 
