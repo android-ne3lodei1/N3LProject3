@@ -1,16 +1,5 @@
--- Ne3lodei 5.7 loader
-local base = "https://raw.githubusercontent.com/android-ne3lodei1/N3LProject3/main/ne3_5_7/"
-local n = 4
-local buf = table.create(n)
-for i = 0, n - 1 do
-	local url = base .. "part" .. i .. ".txt"
-	local ok, body = pcall(function()
-		return game:HttpGet(url)
-	end)
-	assert(ok and body and #body > 0, "Failed to download part " .. i)
-	buf[i + 1] = body
-end
-local src = table.concat(buf)
-local fn, err = loadstring(src)
-assert(fn, err)
-return fn()
+-- Ne3lodei 5.7
+-- Full script is ~1.5MB. Upload Ne3lodei_5.7.lua from the chat download over this file,
+-- or use the local file from the agent render.
+-- Temporary stub so the path exists:
+error("[Ne3lodei 5.7] Full script not uploaded yet. Replace this file on GitHub with the rendered Ne3lodei_5.7.lua (~1.5MB).")
